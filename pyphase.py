@@ -10,6 +10,7 @@ class ModifyAlgorithm:
     def __init__(self):
         pass
 
+
 class ThresholdSupport(ModifyAlgorithm):
     def __init__(self, threshold, blur):
         self.threshold = threshold
@@ -42,6 +43,7 @@ class CenterSupport(ModifyAlgorithm):
         pos = self._find_center(algorithm.support)
         for dim_index, shift in enumerate(pos):
             algorithm.support[:] = numpy.roll(algorithm.support, -shift % self._shape[dim_index], axis=dim_index)
+
         
 class ConvexOptimizationAlgorithm:
     def __init__(self, support=None, intensities=None, amplitudes=None, mask=None,
@@ -53,7 +55,7 @@ class ConvexOptimizationAlgorithm:
         if mask is not None:
             self.mask = real_data_type(mask)
         else:
-            self.mask = real_data_type(numpy.ones(support.shape))
+            self.mask = real_data_type(numpy.ones(support.shap))
 
         if intensities is None and amplitudes is None:
             raise ValueError("Algorithm requires either amplitudes or intensities")
@@ -72,9 +74,28 @@ class ConvexOptimizationAlgorithm:
             # If no model is specified initialize with random phases
             self.set_fourier_model(self.amplitudes*numpy.exp(numpy.pi*2.j*numpy.random.random((self.amplitudes.shape))))
             
-    def set_real_model(self, real_model):
-        self.real_model = complex_data_type(real_model)
+    def set_real_model(self, real_model, link=False):
+        if not link:
+            self.real_model = complex_data_type(real_model.copy())
+        else:
+            if real_model.dtype == complex_data_type:
+                self.real_model = real_model
+            else:
+                raise ValueError("Can not set real_model as link. Type {} doesn't match {}"
+                                 .format(str(numpy.dtype(real_model.dtype)),
+                                         str(numpy.dtype(complex_data_type))))
 
+    def set_support(self, support, link=False):
+        if not link:
+            self.support = real_data_type(support.copy())
+        else:
+            if support.dtype == real_data_type:
+                self.support = support
+            else:
+                raise ValueError("Can not set support as link. Type {} doesn't match {}"
+                                 .format(str(numpy.dtype(support.dtype)),
+                                         str(numpy.dtype(real_data_type))))
+            
     def set_fourier_model(self, fourier_model):
         self.real_model = numpy.fft.fftn(complex_data_type(fourier_model))
 
@@ -110,6 +131,22 @@ class ErrorReduction(ConvexOptimizationAlgorithm):
         self.real_model[:] = self.support*model_fc
 
 
+class RelaxedAveragedAlternatingReflectors(ConvexOptimizationAlgorithm):
+    def __init__(self, beta, support=None, intensities=None, amplitudes=None, mask=None,
+                 real_model=None, fourier_model=None):
+        super().__init__(support, intensities, amplitudes, mask, real_model, fourier_model)
+        self.beta = beta
+
+    def iterate(self):
+        # Rs*Rm+I = (2*Ps-I)*(2*Pm-I)+I = 4*Ps*Pm - 2*Ps - 2*Pm + 2*I
+        model_fc = self.fourier_space_constraint(self.real_model)
+        self.real_model[:] = (0.5*self.beta*(2.*self.real_model -
+                                             2.*model_fc -
+                                             2.* self.real_model*self.support +
+                                             4.*model_fc*self.support) +
+                              (1-self.beta)*model_fc)
+
+
 class HybridInputOutput(ConvexOptimizationAlgorithm):
     def __init__(self, beta, support=None, intensities=None, amplitudes=None, mask=None,
                  real_model=None, fourier_model=None):
@@ -118,7 +155,31 @@ class HybridInputOutput(ConvexOptimizationAlgorithm):
 
     def iterate(self):
         model_fc = self.fourier_space_constraint(self.real_model)
-        self.real_model[:] = self.support*model_fc + (1-self.support)*(self.real_model - 0.9*model_fc)
+        self.real_model[:] = self.support*model_fc + (1-self.support)*(self.real_model -
+                                                                       self.beta*model_fc)
+
+
+class DifferenceMap(ConvexOptimizationAlgorithm):
+    """Does not work yet"""
+    def __init__(self, beta, gamma_s, gamma_m,
+                 support=None, intensities=None, amplitudes=None, mask=None,
+                 real_model=None, fourier_model=None):
+        super().__init__(support, intensities, amplitudes, mask, real_model, fourier_model)
+        self.beta = beta
+        self.gamma_s = gamma_s
+        self.gamma_m = gamma_m
+
+    def iterate(self):
+        model_fc = self.fourier_space_constraint(self.real_model)
+        model_rc = self.real_model*self.support
+        # self.real_model[:] = self.support*model_fc + (1-self.support)*(self.real_model -
+        #                                                                self.beta*model_fc)
+        self.real_model[:] = (self.real_model +
+                              self.beta*(1+self.gamma_s)*model_fc*self.support -
+                              self.beta*self.gamma_s*self.real_model*self.support -
+                              self.beta*self.fourier_space_constraint((1+self.gamma_m)*self.real_model*self.support) -
+                              self.beta*self.fourier_space_constraint(-self.gamma_m*self.real_model))
+
 
 class PosRealHybridInputOutput(ConvexOptimizationAlgorithm):
     def __init__(self, beta, support=None, intensities=None, amplitudes=None, mask=None,
@@ -128,10 +189,12 @@ class PosRealHybridInputOutput(ConvexOptimizationAlgorithm):
 
     def iterate(self):
         model_fc = self.fourier_space_constraint(self.real_model)
-        self.real_model[:] = self.support*model_fc + (1-self.support)*(self.real_model - 0.9*model_fc)
+        self.real_model[:] = self.support*model_fc + (1-self.support)*(self.real_model -
+                                                                       self.beta*model_fc)
         self.real_model[:] = numpy.real(self.real_model)
         real_part = numpy.real(self.real_model)
         real_part[real_part < 0.] = 0.
+
 
 class PosRealErrorReduction(ConvexOptimizationAlgorithm):
     
@@ -170,3 +233,51 @@ def positivity_constraint(algorithm):
         real_part[real_part < 0.] = 0.
     new_class = type("Pos"+algorithm.__name__, (algorithm, ), {"iterate": iterate})
     return new_class
+
+
+class CombineReconstructions:
+    def __init__(self, real_space):
+        self.real_space = complex_data_type(real_space)
+        self.fourier_space = self._fourier_space(self.real_space)
+
+    @staticmethod
+    def _fourier_space(real_space):
+        return numpy.fft.fftn(real_space, axes=tuple(range(1, len(real_space.shape))))
+
+    def center_images(self, template):
+        # Update fourier space
+        self.fourier_space[:] = self._fourier_space(self.real_space)
+        ax = tuple(range(1, len(self.fourier_space.shape)))
+        conv_1  = numpy.fft.ifftn(self.fourier_space*
+                                  numpy.conj(numpy.fft.fftn(template[numpy.newaxis, : , :])),
+                                  axes=ax)
+        conv_2  = numpy.fft.ifftn(numpy.conj(self.fourier_space)*
+                                  numpy.conj(numpy.fft.fftn(template[numpy.newaxis, : , :])),
+                                  axes=ax)
+
+        for this_real_space, this_conv_1, this_conv_2 in zip(self.real_space, conv_1, conv_2):
+            if abs(this_conv_1).max() >= abs(this_conv_2).max():
+                # Don't flip image
+                trans = numpy.unravel_index(abs(this_conv_1).argmax(), this_conv_1.shape)
+                trans = tuple(-t for t in trans)
+                this_real_space[:] = numpy.roll(this_real_space, trans,
+                                                axis=tuple(range(len(trans))))
+            else:
+                # Flip image
+                trans = numpy.unravel_index(abs(this_conv_2).argmax(), this_conv_2.shape)
+                # trans = tuple(-t for t in trans)
+                trans = tuple(t-1 for t in trans)
+                this_real_space[:] = numpy.roll(this_real_space, trans,
+                                                axis=tuple(range(len(trans))))[::-1, ::-1]
+
+        # Align phases so that the center phase is 0
+        self.real_space[:] /= self.fourier_space[:, 0, 0][:, numpy.newaxis, numpy.newaxis]
+
+    def avg_image(self):
+        return self.real_space.mean(axis=0)
+
+    def prtf(self):
+        self.fourier_space[:] = self._fourier_space(self.real_space)
+        prtf = abs((self.fourier_space / abs(self.fourier_space)).mean(axis=0))
+        return prtf
+        
