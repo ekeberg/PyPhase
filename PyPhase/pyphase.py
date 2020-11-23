@@ -19,8 +19,20 @@ class ThresholdSupport(ModifyAlgorithm):
     def update_support(self, algorithm):
         import scipy.ndimage
         blurred_model = scipy.ndimage.gaussian_filter(abs(algorithm.real_model), self.blur)
-        algorithm.support[:] = blurred_model > blurred_model.max() * self.threshold
+        algorithm.support = blurred_model > blurred_model.max() * self.threshold
 
+
+class AreaSupport(ModifyAlgorithm):
+    def __init__(self, area, blur):
+        self.area = area
+        self.blur = blur
+
+    def update_support(self, algorithm):
+        import scipy.ndimage
+        blurred_model = scipy.ndimage.gaussian_filter(abs(algorithm.real_model), self.blur)
+        threshold = numpy.percentile(blurred_model.flat, 100*self.area/numpy.product(blurred_model.shape))
+        algorithm.support = blurred_model > blurred_model.max() * threshold
+        
 
 class CenterSupport(ModifyAlgorithm):
     def __init__(self, array_shape, kernel_sigma):
@@ -30,7 +42,7 @@ class CenterSupport(ModifyAlgorithm):
         radius2 = numpy.zeros(array_shape)
         for this_dim in arrays_nd:
             radius2 = radius2 + this_dim**2
-        self._gaussian_kernel = complex_data_type(numpy.exp(-radius2/(2.*kernel_sigma**2)))
+        self._gaussian_kernel = numpy.fft.ifftshift(complex_data_type(numpy.exp(-radius2/(2.*kernel_sigma**2))))
         self._gaussian_kernel_ft_conj = numpy.conj(numpy.fft.fftn(self._gaussian_kernel))
         self._shape = array_shape
 
@@ -42,87 +54,128 @@ class CenterSupport(ModifyAlgorithm):
     def update_support(self, algorithm):
         pos = self._find_center(algorithm.support)
         for dim_index, shift in enumerate(pos):
-            algorithm.support[:] = numpy.roll(algorithm.support, -shift % self._shape[dim_index], axis=dim_index)
+            algorithm.support = numpy.roll(algorithm.support, -shift % self._shape[dim_index], axis=dim_index)
 
         
 class ConvexOptimizationAlgorithm:
     def __init__(self, support=None, intensities=None, amplitudes=None, mask=None,
-                 real_model=None, fourier_model=None):
-        if support is None:
-            raise ValueError("Must specify a support")
-        self.support = real_data_type(support)
+                 real_model=None, fourier_model=None, link=None):
 
-        if mask is not None:
-            self.mask = real_data_type(mask)
-        else:
-            self.mask = real_data_type(numpy.ones(support.shape))
+        if link is None:
+            if support is None:
+                raise ValueError("Must specify a support")
+            self.support = support
 
-        if intensities is None and amplitudes is None:
-            raise ValueError("Algorithm requires either amplitudes or intensities")
-        if amplitudes is not None:
-            self.amplitudes = real_data_type(amplitudes)
-        else:
-            self.amplitudes = numpy.sqrt(real_data_type(intensities))
+            if mask is not None:
+                self._mask = numpy.fft.fftshift(real_data_type(mask))
+            else:
+                self._mask = numpy.fft.fftshift(real_data_type(numpy.ones(support.shape)))
 
-        if real_model is not None and fourier_model is not None:
-            raise ValueError("Can not specify both real and fourier model at the same time.")
-        if real_model is not None:
-            self.set_real_model(real_model)
-        elif fourier_model is not None:
-            self.set_fourier_model(fourier_model)
-        else:
-            # If no model is specified initialize with random phases
-            self.set_fourier_model(self.amplitudes*numpy.exp(numpy.pi*2.j*numpy.random.random((self.amplitudes.shape))))
+            if intensities is None and amplitudes is None:
+                raise ValueError("Algorithm requires either amplitudes or intensities")
+            if amplitudes is not None:
+                self._amplitudes = numpy.fft.fftshift(real_data_type(amplitudes))
+            else:
+                self._amplitudes = numpy.fft.fftshift(numpy.sqrt(real_data_type(intensities)))
 
-    # @property
-    # def real_model(self):
-    #     return numpy.fft.ifftshift(self._real_model)
-
-    def set_real_model(self, real_model, link=False):
-        if not link:
-            self.real_model = complex_data_type(real_model.copy())
-        else:
-            if real_model.dtype == complex_data_type:
+            if real_model is not None and fourier_model is not None:
+                raise ValueError("Can not specify both real and fourier model at the same time.")
+            if real_model is not None:
                 self.real_model = real_model
+            elif fourier_model is not None:
+                self.fourier_model = fourier_model
             else:
-                raise ValueError("Can not set real_model as link. Type {} doesn't match {}"
-                                 .format(str(numpy.dtype(real_model.dtype)),
-                                         str(numpy.dtype(complex_data_type))))
-
-    def set_support(self, support, link=False):
-        if not link:
-            self.support = real_data_type(support.copy())
+                # If no model is specified initialize with random phases
+                self.fourier_model = self.amplitudes*numpy.exp(numpy.pi*2.j*numpy.random.random((self.amplitudes.shape)))
         else:
-            if support.dtype == real_data_type:
-                self.support = support
-            else:
-                raise ValueError("Can not set support as link. Type {} doesn't match {}"
-                                 .format(str(numpy.dtype(support.dtype)),
-                                         str(numpy.dtype(real_data_type))))
-            
-    def set_fourier_model(self, fourier_model):
-        self.real_model = numpy.fft.fftn(complex_data_type(fourier_model))
+            self.link(link)
 
+    def link(self, alg):
+        if not isinstance(alg, ConvexOptimizationAlgorithm):
+            raise ValueError("link must be a ConvexOptimizationAlgorithm object")
+        self._support = alg._support
+        self._amplitudes = alg._amplitudes
+        self._mask = alg._mask
+        self._real_model = alg._real_model
+
+    def is_linked(self, alg):
+        if (self._support == alg._support and self._amplitudes == alg._amplitudes and
+            self._mask == alg._mask and self._real_model == alg._real_model):
+            return True
+        else:
+            return False
+        
+    @property
+    def real_model(self):
+        return numpy.fft.ifftshift(self._real_model)
+
+    @real_model.setter
+    def real_model(self, real_model):
+        if self._real_model.shape == real_model.shape:
+            self._real_model[...] = complex_data_type(numpy.fft.fftshift(real_model))
+        else:
+            self._real_model = complex_data_type(numpy.fft.fftshift(real_model))
+            
+    def link_model(self, alg):
+        self._real_model = alg._real_model
+
+    @property
+    def support(self):
+        return numpy.fft.ifftshift(self._support)
+
+    @support.setter
+    def support(self, support):
+        self._support = real_data_type(numpy.fft.fftshift(support))
+    
+    def link_support(self, alg):
+        self._support = alg._support
+
+    @property
+    def fourier_model(self):
+        return numpy.fft.ifftshift(numpy.fft.fftn(self._real_model))
+
+    @fourier_model.setter
+    def fourier_model(self, fourier_model):
+        self._real_model = numpy.fft.ifftn(numpy.fft.fftshift(fourier_model))
+
+    @property
+    def fourier_model_projected(self):
+        return numpy.fft.ifftshift(numpy.exp(1.j*numpy.angle(numpy.fft.fftn(self._real_model)))*self._amplitudes + (1-self._mask)*numpy.fft.fftn(self._real_model))
+
+    @property
+    def real_model_before_projection(self):
+        return numpy.fft.fftshift(numpy.fft.ifftn(numpy.exp(1.j*numpy.angle(numpy.fft.fftn(self._real_model)))*self._amplitudes + (1-self._mask)*numpy.fft.fftn(self._real_model)))
+        
+    @property
+    def amplitudes(self):
+        return numpy.fft.ifftshift(self._amplitudes)
+        
+    @property
+    def mask(self):
+        return numpy.fft.ifftshift(self._mask)
+        
     def fourier_space_constraint(self, data):
         """Input is real space"""
         data_ft = numpy.fft.fftn(data)
-        result = numpy.fft.ifftn(self.mask*data_ft/abs(data_ft)*self.amplitudes +
-                                 (1-self.mask)*data_ft)
+        # result = numpy.fft.ifftn(self._mask*data_ft/abs(data_ft)*self._amplitudes +
+        #                          (1-self._mask)*data_ft)
+        result = numpy.fft.ifftn(self._mask*numpy.exp(1.j*numpy.angle(data_ft))*self._amplitudes +
+                                 (1-self._mask)*data_ft)
         return result
 
     def real_space_constraint(self, data):
-        return data*self.support
+        return data*self._support
 
     def fourier_space_error(self):
-        return numpy.sqrt( (( (abs(numpy.fft.fftn(self.real_model)*self.mask) - self.amplitudes) /
-                              numpy.prod(numpy.sqrt(numpy.array(self.amplitudes.shape))) )**2).sum() )
+        return numpy.sqrt( (( (abs(numpy.fft.fftn(self._real_model)*self._mask) - self._amplitudes) /
+                              numpy.prod(numpy.sqrt(numpy.array(self._amplitudes.shape))) )**2).sum() )
 
     def real_space_error(self):
-        return numpy.sqrt( (abs(self.fourier_space_constraint(self.real_model)*(1-self.support))**2).sum() )
+        return numpy.sqrt( (abs(self.fourier_space_constraint(self._real_model)*(1-self._support))**2).sum() )
 
     @property
     def real_model_projected(self):
-        return self.real_model*self.support
+        return numpy.fft.ifftshift(self._real_model*self._support)
 
     def iterate(self):
         pass
@@ -131,82 +184,81 @@ class ConvexOptimizationAlgorithm:
 class ErrorReduction(ConvexOptimizationAlgorithm):
     
     def iterate(self):
-        model_fc = self.fourier_space_constraint(self.real_model)
-        self.real_model[:] = self.support*model_fc
+        model_fc = self.fourier_space_constraint(self._real_model)
+        self._real_model[:] = self._support*model_fc
 
 
 class RelaxedAveragedAlternatingReflectors(ConvexOptimizationAlgorithm):
-    def __init__(self, beta, support=None, intensities=None, amplitudes=None, mask=None,
-                 real_model=None, fourier_model=None):
-        super().__init__(support, intensities, amplitudes, mask, real_model, fourier_model)
+    def __init__(self, beta, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.beta = beta
 
     def iterate(self):
         # Rs*Rm+I = (2*Ps-I)*(2*Pm-I)+I = 4*Ps*Pm - 2*Ps - 2*Pm + 2*I
-        model_fc = self.fourier_space_constraint(self.real_model)
-        self.real_model[:] = (0.5*self.beta*(2.*self.real_model -
-                                             2.*model_fc -
-                                             2.* self.real_model*self.support +
-                                             4.*model_fc*self.support) +
-                              (1-self.beta)*model_fc)
+        model_fc = self.fourier_space_constraint(self._real_model)
+        self._real_model[:] = (0.5*self.beta*(2.*self._real_model -
+                                              2.*model_fc -
+                                              2.* self._real_model*self._support +
+                                              4.*model_fc*self._support) +
+                               (1-self.beta)*model_fc)
 
 
 class HybridInputOutput(ConvexOptimizationAlgorithm):
     def __init__(self, beta, support=None, intensities=None, amplitudes=None, mask=None,
-                 real_model=None, fourier_model=None):
-        super().__init__(support, intensities, amplitudes, mask, real_model, fourier_model)
+                 real_model=None, fourier_model=None, link=None):
+        super().__init__(support, intensities, amplitudes, mask, real_model, fourier_model, link)
         self.beta = beta
 
     def iterate(self):
-        model_fc = self.fourier_space_constraint(self.real_model)
-        self.real_model[:] = self.support*model_fc + (1-self.support)*(self.real_model -
-                                                                       self.beta*model_fc)
+        model_fc = self.fourier_space_constraint(self._real_model)
+        self._real_model[:] = self._support*model_fc + (1-self._support)*(self._real_model -
+                                                                          self.beta*model_fc)
 
 
 class DifferenceMap(ConvexOptimizationAlgorithm):
     """Does not work yet"""
     def __init__(self, beta, gamma_s, gamma_m,
                  support=None, intensities=None, amplitudes=None, mask=None,
-                 real_model=None, fourier_model=None):
-        super().__init__(support, intensities, amplitudes, mask, real_model, fourier_model)
+                 real_model=None, fourier_model=None, link=None):
+        super().__init__(support, intensities, amplitudes, mask, real_model, fourier_model, link)
         self.beta = beta
         self.gamma_s = gamma_s
         self.gamma_m = gamma_m
 
     def iterate(self):
-        model_fc = self.fourier_space_constraint(self.real_model)
-        model_rc = self.real_model*self.support
+        model_fc = self.fourier_space_constraint(self._real_model)
+        model_rc = self._real_model*self._support
         # self.real_model[:] = self.support*model_fc + (1-self.support)*(self.real_model -
         #                                                                self.beta*model_fc)
-        self.real_model[:] = (self.real_model +
-                              self.beta*(1+self.gamma_s)*model_fc*self.support -
-                              self.beta*self.gamma_s*self.real_model*self.support -
-                              self.beta*self.fourier_space_constraint((1+self.gamma_m)*self.real_model*self.support) -
-                              self.beta*self.fourier_space_constraint(-self.gamma_m*self.real_model))
+        self.real_model[:] = (self._real_model +
+                              self.beta*(1+self.gamma_s)*model_fc*self._support -
+                              self.beta*self.gamma_s*self._real_model*self._support -
+                              self.beta*self.fourier_space_constraint((1+self.gamma_m)*self._real_model*self._support) -
+                              self.beta*self.fourier_space_constraint(-self.gamma_m*self._real_model))
 
 
 class PosRealHybridInputOutput(ConvexOptimizationAlgorithm):
     def __init__(self, beta, support=None, intensities=None, amplitudes=None, mask=None,
-                 real_model=None, fourier_model=None):
-        super().__init__(support, intensities, amplitudes, mask, real_model, fourier_model)
+                 real_model=None, fourier_model=None, link=None):
+        super().__init__(support, intensities, amplitudes, mask, real_model, fourier_model, link)
         self.beta = beta
 
     def iterate(self):
         model_fc = self.fourier_space_constraint(self.real_model)
-        self.real_model[:] = self.support*model_fc + (1-self.support)*(self.real_model -
-                                                                       self.beta*model_fc)
-        self.real_model[:] = numpy.real(self.real_model)
-        real_part = numpy.real(self.real_model)
+        self._real_model[:] = self._support*model_fc + (1-self._support)*(self._real_model -
+                                                                          self.beta*model_fc)
+        self._real_model[:] = numpy.real(self._real_model)
+        real_part = numpy.real(self._real_model)
         real_part[real_part < 0.] = 0.
 
 
 class PosRealErrorReduction(ConvexOptimizationAlgorithm):
     
     def iterate(self):
-        model_fc = self.fourier_space_constraint(self.real_model)
-        self.real_model[:] = self.support*model_fc
-        self.real_model[:] = numpy.real(self.real_model)
-        real_part = numpy.real(self.real_model)
+        model_fc = self.fourier_space_constraint(self._real_model)
+        self._real_model[:] = self._support*model_fc
+        self._real_model[:] = numpy.real(self._real_model)
+        real_part = numpy.real(self._real_model)
         real_part[real_part < 0.] = 0.
 
 
@@ -214,7 +266,7 @@ def add_reality_constraint(algorithm_object):
     import types
     def iterate(self):
         self._before_reality_constraint_iterate()
-        self.real_model[:] = numpy.real(self.real_model)
+        self._real_model[:] = numpy.real(self._real_model)
     print(iterate)
     print(algorithm_object.iterate)
     algorithm_object._before_reality_constraint_iterate = algorithm_object.iterate
@@ -225,7 +277,7 @@ def add_reality_constraint(algorithm_object):
 def reality_constraint(algorithm):
     def iterate(self):
         algorithm.iterate(self)
-        self.real_model[:] = numpy.real(self.real_model)
+        self._real_model[:] = numpy.real(self._real_model)
     new_class = type("Real"+algorithm.__name__, (algorithm, ), {"iterate": iterate})
     return new_class
 
@@ -233,7 +285,7 @@ def reality_constraint(algorithm):
 def positivity_constraint(algorithm):
     def iterate(self):
         algorithm.iterate(self)
-        real_part = numpy.real(self.real_model)
+        real_part = numpy.real(self._real_model)
         real_part[real_part < 0.] = 0.
     new_class = type("Pos"+algorithm.__name__, (algorithm, ), {"iterate": iterate})
     return new_class
@@ -246,18 +298,19 @@ class CombineReconstructions:
 
     @staticmethod
     def _fourier_space(real_space):
-        return numpy.fft.fftn(real_space, axes=tuple(range(1, len(real_space.shape))))
+        axis_tuple = tuple(range(1, len(real_space.shape)))
+        return numpy.fft.ifftshift(numpy.fft.fftn(numpy.fft.fftshift(real_space, axes=axis_tuple),
+                                                  axes=axis_tuple), axes=axis_tuple)
 
     def center_images(self, template):
         # Update fourier space
         self.fourier_space[:] = self._fourier_space(self.real_space)
         ax = tuple(range(1, len(self.fourier_space.shape)))
-        conv_1  = numpy.fft.ifftn(self.fourier_space*
-                                  numpy.conj(numpy.fft.fftn(template[numpy.newaxis, : , :])),
-                                  axes=ax)
-        conv_2  = numpy.fft.ifftn(numpy.conj(self.fourier_space)*
-                                  numpy.conj(numpy.fft.fftn(template[numpy.newaxis, : , :])),
-                                  axes=ax)
+        template_fft_conj = numpy.conj(numpy.fft.ifftshift(numpy.fft.fftn(numpy.fft.fftshift(template))))
+        conv_1  = numpy.fft.ifftshift(numpy.fft.ifftn(numpy.fft.fftshift(
+            self.fourier_space*template_fft_conj[numpy.newaxis, :, :], axes=ax), axes=ax), axes=ax)
+        conv_2  = numpy.fft.ifftshift(numpy.fft.ifftn(numpy.fft.fftshift(
+            numpy.conj(self.fourier_space)*template_fft_conj[numpy.newaxis, :, :], axes=ax), axes=ax), axes=ax)
 
         for this_real_space, this_conv_1, this_conv_2 in zip(self.real_space, conv_1, conv_2):
             if abs(this_conv_1).max() >= abs(this_conv_2).max():
@@ -275,9 +328,9 @@ class CombineReconstructions:
                                                 axis=tuple(range(len(trans))))[::-1, ::-1]
 
         # Align phases so that the center phase is 0
-        self.real_space[:] /= self.fourier_space[:, 0, 0][:, numpy.newaxis, numpy.newaxis]
+        self.real_space[:] /= self.fourier_space[(slice(None), ) + tuple(s//2 for s in self.fourier_space.shape[1:])][:, numpy.newaxis, numpy.newaxis]
 
-    def avg_image(self):
+    def average_image(self):
         return self.real_space.mean(axis=0)
 
     def prtf(self):
