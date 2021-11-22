@@ -299,26 +299,40 @@ class HybridInputOutput(ConvexOptimizationAlgorithm):
 
 
 class DifferenceMap(ConvexOptimizationAlgorithm):
-    """Does not work yet"""
-    def __init__(self, beta, gamma_s, gamma_m,
+    def __init__(self, beta, gamma_s=None, gamma_m=None, 
                  support=None, intensities=None, amplitudes=None, mask=None,
                  real_model=None, fourier_model=None, link=None):
         super().__init__(support, intensities, amplitudes, mask, real_model, fourier_model, link)
         self.beta = beta
-        self.gamma_s = gamma_s
-        self.gamma_m = gamma_m
+        # self.gamma_s = gamma_s
+        # self.gamma_m = gamma_m
+        sigma = 0.1
+        if gamma_s is None:
+            # self.gamma_s = - 1/self.beta
+            self.gamma_s = - (4 + (2+beta)*sigma + beta*sigma**2) / (beta*(4 - sigma + sigma**2))
+        else:
+            self.gamma_s = gamma_s
+        if gamma_m is None:
+            # self.gamma_m = 1/self.beta
+            self.gamma_m = (6 - 2*sigma - beta*(2 - 3*sigma + sigma**2)) / (beta*(4 - sigma + sigma**2))
+        else:
+            self.gamma_m = gamma_m
 
     def iterate(self):
         model_fc = self.fourier_space_constraint(self._real_model)
-        model_rc = self._real_model*self._support
-        # self.real_model[:] = self.support*model_fc + (1-self.support)*(self.real_model -
-        #                                                                self.beta*model_fc)
-        self.real_model[:] = (self._real_model +
-                              self.beta*(1+self.gamma_s)*model_fc*self._support -
-                              self.beta*self.gamma_s*self._real_model*self._support -
-                              self.beta*self.fourier_space_constraint((1+self.gamma_m)*self._real_model*self._support) -
-                              self.beta*self.fourier_space_constraint(-self.gamma_m*self._real_model))
+        model_rc = self.real_space_constraint(self._real_model)
 
+        # fs = model_rc - 1/self.beta*(model_rc - self._real_model)
+        # fm = model_fc + 1/self.beta*(model_fc - self._real_model)
+        # self._real_model[...] = self._real_model + self.beta*(self.real_space_constraint(fm) - self.fourier_space_constraint(fs))
+
+        # fs = model_rc - 1/self.beta*((1+self.gamma_s)*model_rc - self.gamma_s*self._real_model)
+        # fm = model_fc + 1/self.beta*((1+self.gamma_m)*model_fc - self.gamma_m*self._real_model)
+        fs = (1+self.gamma_s)*model_rc - self.gamma_s*self._real_model
+        fm = (1+self.gamma_m)*model_fc - self.gamma_m*self._real_model
+        self._real_model[...] = self._real_model + self.beta*(self.real_space_constraint(fm) - self.fourier_space_constraint(fs))
+        
+        
 
 class PosRealHybridInputOutput(ConvexOptimizationAlgorithm):
     def __init__(self, beta, support=None, intensities=None, amplitudes=None, mask=None,
