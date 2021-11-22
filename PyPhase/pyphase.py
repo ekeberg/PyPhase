@@ -1,11 +1,55 @@
-# import afnumpy as numpy
-# import afnumpy.fft
-# numpy.fft = afnumpy.fft
-import numpy
+import enum
 
-real_data_type = numpy.float32
-complex_data_type = numpy.complex64
 
+try:
+    import cupy
+except ImportError:
+    cupy = None
+
+class Backend(enum.Enum):
+    CPU = 1
+    CUPY = 2
+
+def set_backend(new_backend):
+    global backend, numpy, scipy, ndimage, real_data_type, complex_data_type
+    backend = new_backend
+    if backend == Backend.CPU:
+        import numpy
+        import scipy
+        import scipy.ndimage as ndimage
+        real_data_type = numpy.float32
+        complex_data_type = numpy.complex64
+    elif backend == Backend.CUPY:
+        import cupy as numpy
+        import cupyx.scipy as scipy
+        import cupyx.scipy.ndimage as ndimage
+        import functools
+        real_data_type = functools.partial(numpy.asarray, dtype="float32")
+        complex_data_type = functools.partial(numpy.asarray, dtype="complex64")
+    else:
+        raise ValueError(f"Unknown backend {backend}")
+
+def cupy_on():
+    return backend == Backend.CUPY
+
+def cpu_on():
+    return backend == Backend.CPU
+
+def cpu_array(array):
+    if cupy and isinstance(array, cupy.ndarray):
+        return array.get()
+    else:
+        return array
+
+if cupy and cupy.cuda.is_available():
+    set_backend(Backend.CUPY)
+    print("Using Cupy backend")
+else:
+    set_backend(Backend.CPU)
+    print("Using CPU backend")
+
+
+        
 class ModifyAlgorithm:
     def __init__(self):
         pass
@@ -17,8 +61,7 @@ class ThresholdSupport(ModifyAlgorithm):
         self.blur = blur
 
     def update_support(self, algorithm):
-        import scipy.ndimage
-        blurred_model = scipy.ndimage.gaussian_filter(abs(algorithm.real_model), self.blur)
+        blurred_model = ndimage.gaussian_filter(abs(algorithm.real_model), self.blur)
         algorithm.support = blurred_model > blurred_model.max() * self.threshold
 
 
@@ -28,16 +71,18 @@ class AreaSupport(ModifyAlgorithm):
         self.blur = blur
 
     def update_support(self, algorithm):
-        import scipy.ndimage
-        blurred_model = scipy.ndimage.gaussian_filter(abs(algorithm.real_model), self.blur)
+        blurred_model = ndimage.gaussian_filter(abs(algorithm.real_model), self.blur)
         threshold = numpy.percentile(blurred_model.flat, 100*self.area/numpy.product(blurred_model.shape))
         algorithm.support = blurred_model > blurred_model.max() * threshold
         
 
 class CenterSupport(ModifyAlgorithm):
     def __init__(self, array_shape, kernel_sigma):
-        arrays_1d = [numpy.fft.fftshift(numpy.arange(this_size) - this_size/2. + 0.5)
+        # arrays_1d = [numpy.fft.fftshift(numpy.arange(this_size) - this_size/2. + 0.5)
+        #              for this_size in array_shape]
+        arrays_1d = [numpy.arange(this_size) - this_size/2.
                      for this_size in array_shape]
+
         arrays_nd = numpy.meshgrid(*arrays_1d, indexing="ij")
         radius2 = numpy.zeros(array_shape)
         for this_dim in arrays_nd:
@@ -47,20 +92,31 @@ class CenterSupport(ModifyAlgorithm):
         self._shape = array_shape
 
     def _find_center(self, array):
-        conv = numpy.fft.ifftn(numpy.fft.fftn(array)*self._gaussian_kernel_ft_conj)
+        conv = numpy.fft.ifftn(numpy.fft.fftn(numpy.fft.fftshift(array))*self._gaussian_kernel_ft_conj)
         pos = numpy.unravel_index(conv.argmax(), conv.shape)
         return pos
+        # return [int(p) for p in pos]
     
     def update_support(self, algorithm):
         pos = self._find_center(algorithm.support)
-        for dim_index, shift in enumerate(pos):
-            algorithm.support = numpy.roll(algorithm.support, -shift % self._shape[dim_index], axis=dim_index)
+        # for dim_index, shift in enumerate(pos):
+        #     algorithm.support = numpy.roll(algorithm.support, -int(shift) % self._shape[dim_index], axis=dim_index)
+        if backend == Backend.CUPY:
+            shift = [-p.get() for p in pos]
+        else:
+            shift = [-p for p in pos]
+        # print(shift)
+        algorithm.support = numpy.roll(algorithm.support, shift=tuple(shift), axis=tuple(range(len(shift))))
+        # algorithm._support[...] = numpy.roll(algorithm._support, shift)
 
         
 class ConvexOptimizationAlgorithm:
     def __init__(self, support=None, intensities=None, amplitudes=None, mask=None,
                  real_model=None, fourier_model=None, link=None):
 
+        self._real_model = None
+        self._support = None
+        
         if link is None:
             if support is None:
                 raise ValueError("Must specify a support")
@@ -89,7 +145,7 @@ class ConvexOptimizationAlgorithm:
                 self.fourier_model = self.amplitudes*numpy.exp(numpy.pi*2.j*numpy.random.random((self.amplitudes.shape)))
         else:
             self.link(link)
-
+            
     def link(self, alg):
         if not isinstance(alg, ConvexOptimizationAlgorithm):
             raise ValueError("link must be a ConvexOptimizationAlgorithm object")
@@ -109,9 +165,16 @@ class ConvexOptimizationAlgorithm:
     def real_model(self):
         return numpy.fft.ifftshift(self._real_model)
 
+    # @property
+    # def real_model_cpu(self):
+    #     if cupy_on():
+    #         return self.real_model.get()
+    #     else:
+    #         return self.real_model
+
     @real_model.setter
     def real_model(self, real_model):
-        if self._real_model.shape == real_model.shape:
+        if self._real_model is not  None and self._real_model.shape == real_model.shape:
             self._real_model[...] = complex_data_type(numpy.fft.fftshift(real_model))
         else:
             self._real_model = complex_data_type(numpy.fft.fftshift(real_model))
@@ -123,9 +186,19 @@ class ConvexOptimizationAlgorithm:
     def support(self):
         return numpy.fft.ifftshift(self._support)
 
+    # @property
+    # def support_cpu(self):
+    #     if cupy_on():
+    #         return self.support.get()
+    #     else:
+    #         return self.support
+    
     @support.setter
     def support(self, support):
-        self._support = real_data_type(numpy.fft.fftshift(support))
+        if self._support is not None and self._support.shape == support.shape:
+            self._support[...] = real_data_type(numpy.fft.fftshift(support))
+        else:
+            self._support = real_data_type(numpy.fft.fftshift(support))
     
     def link_support(self, alg):
         self._support = alg._support
@@ -134,9 +207,19 @@ class ConvexOptimizationAlgorithm:
     def fourier_model(self):
         return numpy.fft.ifftshift(numpy.fft.fftn(self._real_model))
 
+    # @property
+    # def fourier_model_cpu(self):
+    #     if cupy_on():
+    #         return self.fourier_model.get()
+    #     else:
+    #         return self.fourier_model
+
     @fourier_model.setter
     def fourier_model(self, fourier_model):
-        self._real_model = numpy.fft.ifftn(numpy.fft.fftshift(fourier_model))
+        if self._real_model is not None and self._real_model.shape == fourier_model.shape:
+            self._real_model[...] = numpy.fft.ifftn(numpy.fft.fftshift(fourier_model))
+        else:
+            self._real_model = numpy.fft.ifftn(numpy.fft.fftshift(fourier_model))
 
     @property
     def fourier_model_projected(self):
@@ -198,7 +281,7 @@ class RelaxedAveragedAlternatingReflectors(ConvexOptimizationAlgorithm):
         model_fc = self.fourier_space_constraint(self._real_model)
         self._real_model[:] = (0.5*self.beta*(2.*self._real_model -
                                               2.*model_fc -
-                                              2.* self._real_model*self._support +
+                                              2.*self._real_model*self._support +
                                               4.*model_fc*self._support) +
                                (1-self.beta)*model_fc)
 
@@ -337,4 +420,47 @@ class CombineReconstructions:
         self.fourier_space[:] = self._fourier_space(self.real_space)
         prtf = abs((self.fourier_space / abs(self.fourier_space)).mean(axis=0))
         return prtf
+        
+class CombineReconstructionsSequential:
+    def __init__(self, reference):
+        self.reference = complex_data_type(reference)
+        # self.fourier_reference = numpy.fft.ifftshift(numpy.fft.fftn(numpy.fft.fftshift(self.reference)))
+        self.fourier_reference = numpy.fft.fftn(numpy.fft.fftshift(self.reference))
+        self.image_sum = numpy.zeros_like(self.reference)
+        self.phase_sum = numpy.zeros_like(self.reference)
+        self.counter = 0
+
+    def add_image(self, image):
+        # fourier_image = numpy.fft.ifftshift(numpy.fft.fftn(numpy.fft.fftshift(image)))
+        fourier_image = numpy.fft.fftn(numpy.fft.fftshift(image))
+        conv_1 = numpy.fft.ifftn(numpy.conj(fourier_image)*self.fourier_reference)
+        conv_2 = numpy.fft.ifftn(fourier_image*self.fourier_reference)
+
+        if abs(conv_1).max() > abs(conv_2).max():
+            trans = numpy.unravel_index(abs(conv_1).argmax(), conv_1.shape)
+            translated_image = numpy.roll(image, trans, tuple(range(len(trans))))
+        else:
+            trans = numpy.unravel_index(abs(conv_2).argmax(), conv_2.shape)
+            # trans = tuple(t-1 for t in trans)
+            trans = tuple(t+1 for t in trans)
+            #translated_image = numpy.roll(image, trans, tuple(range(len(trans))))[::-1, ::-1]
+            flipped_image = image[(slice(None, None, -1), )*len(trans)]
+            translated_image = numpy.roll(flipped_image, trans, tuple(range(len(trans))))
+
+        self.image_sum += translated_image
+        ft = numpy.fft.ifftshift(numpy.fft.fftn(numpy.fft.fftshift(translated_image)))
+        # ft /= ft[ft.shape[0]//2, ft.shape[0]//2]
+        ft /= ft[tuple(s//2 for s in ft.shape)]
+        self.phase_sum += numpy.exp(1.j*numpy.angle(ft))
+        self.counter += 1
+
+    def average_image(self):
+        if self.counter <= 0:
+            raise ValueError("Trying to retrieve average image without adding images first.")
+        return self.image_sum / self.counter
+
+    def prtf(self):
+        if self.counter <= 0:
+            raise ValueError("Trying to retrieve PRTF without adding images first.")
+        return abs(self.phase_sum / self.counter)
         
