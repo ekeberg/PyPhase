@@ -21,8 +21,8 @@ def set_backend(new_backend):
     if backend == Backend.CPU:
         import numpy
         import scipy
-        from scipy.fft import fft
-        from scipy.ndimage import ndimage
+        from scipy import fft
+        from scipy import ndimage
         real_type = numpy.float32
         complex_type = numpy.complex64
     elif backend == Backend.CUPY:
