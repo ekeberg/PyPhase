@@ -427,7 +427,6 @@ class CombineReconstructions:
 
     def add_image(self, image):
         """Add one reconstruction"""
-        # fourier_image = fft.ifftshift(fft.fftn(fft.fftshift(image)))
         fourier_image = fft.fftn(fft.fftshift(image))
         conv_1 = fft.ifftn(numpy.conj(fourier_image)*self.fourier_reference)
         conv_2 = fft.ifftn(fourier_image*self.fourier_reference)
@@ -442,11 +441,11 @@ class CombineReconstructions:
             flipped_image = image[(slice(None, None, -1), )*len(trans)]
             translated_image = numpy.roll(flipped_image, trans, axis_tuple)
 
-        self.image_sum += translated_image
         ft = fft.ifftshift(fft.fftn(fft.fftshift(translated_image)))
-        # ft /= ft[ft.shape[0]//2, ft.shape[0]//2]
-        ft /= ft[tuple(s//2 for s in ft.shape)]
+        average_phase = numpy.angle(ft[tuple(s//2 for s in ft.shape)])
+        ft /= numpy.exp(1.j*average_phase)
         self.phase_sum += numpy.exp(1.j*numpy.angle(ft))
+        self.image_sum += translated_image / numpy.exp(1.j*average_phase)
         self.counter += 1
 
     def average_image(self):
