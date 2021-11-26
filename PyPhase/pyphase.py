@@ -301,13 +301,15 @@ class ConvexOptimizationAlgorithm:
         # Rescale to make Fourier and real-space error have
         # similar units
         rescaling = numpy.sqrt(numpy.prod(numpy.array(self._mask.shape)))
-        return numpy.sqrt(((diff / rescaling)**2).sum())
+        fourier_error = numpy.sqrt(((diff / rescaling)**2).sum())
+        return float(fourier_error)
 
     def real_space_error(self):
         """Real-space error of the current iterate"""
         before_projection = self.fourier_space_constraint(self._real_model)
         diff = abs(before_projection*(1-self._support))
-        return numpy.sqrt((diff**2).sum())
+        real_error = numpy.sqrt((diff**2).sum())
+        return float(real_error)
 
     @property
     def real_model_projected(self):
