@@ -427,6 +427,7 @@ class CombineReconstructions:
 
     def add_image(self, image):
         """Add one reconstruction"""
+        image = complex_type(image)
         fourier_image = fft.fftn(fft.fftshift(image))
         conv_1 = fft.ifftn(numpy.conj(fourier_image)*self.fourier_reference)
         conv_2 = fft.ifftn(fourier_image*self.fourier_reference)
