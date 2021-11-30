@@ -38,12 +38,12 @@ def set_backend(new_backend):
 
 
 def cupy_on():
-    """Check fi the backend is Backend.CUPY"""
+    """Check if the backend is Backend.CUPY"""
     return backend == Backend.CUPY
 
 
 def cpu_on():
-    """Check fi the backend is Backend.CPU"""
+    """Check if the backend is Backend.CPU"""
     return backend == Backend.CPU
 
 
