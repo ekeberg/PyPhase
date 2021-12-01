@@ -159,7 +159,6 @@ class CenterSupport(ModifyAlgorithm):
         conv = fft.ifftn(fft.fftn(fft.fftshift(array))*self._kernel_ft_conj)
         pos = numpy.unravel_index(conv.argmax(), conv.shape)
         return pos
-        # return [int(p) for p in pos]
 
     def update_support(self, algorithm):
         """Apply the support update rule for the real space in algorithm"""
@@ -170,75 +169,6 @@ class CenterSupport(ModifyAlgorithm):
             shift = [-p for p in pos]
         algorithm.support = numpy.roll(algorithm.support, shift=tuple(shift),
                                        axis=tuple(range(len(shift))))
-
-# class ModifyAlgorithm:
-#     """Abstract class for algorithms that work on phasing algorithms"""
-#     def __init__(self):
-#         pass
-
-
-# class ThresholdSupport(ModifyAlgorithm):
-#     """Update the support by thresholding a blurred version of real-space"""
-#     def __init__(self, threshold, blur):
-#         super().__init__()
-#         self.threshold = threshold
-#         self.blur = blur
-
-#     def update_support(self, algorithm):
-#         """Apply the support update rule for the real space in algorithm"""
-#         blurred_model = ndimage.gaussian_filter(abs(algorithm.real_model),
-#                                                 self.blur)
-#         rescaled_threshold = blurred_model.max() * self.threshold
-#         algorithm.support = blurred_model > rescaled_threshold
-
-
-# class AreaSupport(ModifyAlgorithm):
-#     """Update the support to the densest part of real-space after blurring"""
-#     def __init__(self, area, blur):
-#         super().__init__()
-#         self.area = area
-#         self.blur = blur
-
-#     def update_support(self, algorithm):
-#         """Apply the support update rule for the real space in algorithm"""
-#         blurred_model = ndimage.gaussian_filter(abs(algorithm.real_model),
-#                                                 self.blur)
-#         area_percent = self.area/numpy.product(blurred_model.shape)
-#         threshold = numpy.percentile(blurred_model.flat, area_percent)
-#         algorithm.support = blurred_model > blurred_model.max() * threshold
-
-
-# class CenterSupport(ModifyAlgorithm):
-#     """Shift the support to the center of the field of view"""
-#     def __init__(self, array_shape, kernel_sigma):
-#         super().__init__()
-#         arrays_1d = [numpy.arange(this_size) - this_size/2.
-#                      for this_size in array_shape]
-
-#         arrays_nd = numpy.meshgrid(*arrays_1d, indexing="ij")
-#         radius2 = numpy.zeros(array_shape)
-#         for this_dim in arrays_nd:
-#             radius2 = radius2 + this_dim**2
-#         gaussian_kernel = numpy.exp(-radius2/(2.*kernel_sigma**2))
-#         self._kernel = fft.ifftshift(complex_type(gaussian_kernel))
-#         self._kernel_ft_conj = numpy.conj(fft.fftn(self._kernel))
-#         self._shape = array_shape
-
-#     def _find_center(self, array):
-#         conv = fft.ifftn(fft.fftn(fft.fftshift(array))*self._kernel_ft_conj)
-#         pos = numpy.unravel_index(conv.argmax(), conv.shape)
-#         return pos
-#         # return [int(p) for p in pos]
-
-#     def update_support(self, algorithm):
-#         """Apply the support update rule for the real space in algorithm"""
-#         pos = self._find_center(algorithm.support)
-#         if backend == Backend.CUPY:
-#             shift = [-p.get() for p in pos]
-#         else:
-#             shift = [-p for p in pos]
-#         algorithm.support = numpy.roll(algorithm.support, shift=tuple(shift),
-#                                        axis=tuple(range(len(shift))))
 
 
 class ConvexOptimizationAlgorithm:
