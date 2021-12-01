@@ -176,7 +176,7 @@ class ConvexOptimizationAlgorithm:
     def __init__(self, support=None, intensities=None,
                  amplitudes=None, mask=None,
                  real_model=None, fourier_model=None,
-                 link=None):
+                 constraints=None, link=None):
 
         self._real_model = None
         self._support = None
@@ -212,6 +212,14 @@ class ConvexOptimizationAlgorithm:
                 self.fourier_model = self.amplitudes*numpy.exp(1.j*phases)
 
             self._iteration = [0]
+
+            if constraints is None:
+                self.constraints = []
+            else:
+                try:
+                    self.constraints = list(constraints)
+                except TypeError:
+                    self.constraints = [constraints]
         else:
             self.link(link)
 
@@ -225,6 +233,7 @@ class ConvexOptimizationAlgorithm:
         self._mask = alg._mask
         self._real_model = alg._real_model
         self._iteration = alg._iteration
+        self.constraints = alg.constraints
 
     def is_linked(self, alg):
         """Check if two algorithms are properly linked"""
@@ -354,14 +363,23 @@ class ConvexOptimizationAlgorithm:
         return fft.ifftshift(self._real_model*self._support)
 
     def iterate(self):
-        """Update the iterate. Should be overloaded in subclasses"""
+        """Progress the algorithm one iteration. Call this function!"""
         self._iteration[0] += 1
+        self.update()
+        for constraint in self.constraints:
+            constraint(self)
+
+    def update(self):
+        """Update the iterate. Should be overloaded in subclasses. Will be
+        called by iterate() so don't call it yourself.
+
+        """
+        pass
 
 
 class ErrorReduction(ConvexOptimizationAlgorithm):
     """Basic error-reduction algorithm. Used mainly for refinement"""
-    def iterate(self):
-        super().iterate()
+    def update(self):
         model_fc = self.fourier_space_constraint(self._real_model)
         self._real_model[:] = self._support*model_fc
 
@@ -372,8 +390,7 @@ class RelaxedAveragedAlternatingReflectors(ConvexOptimizationAlgorithm):
         super().__init__(*args, **kwargs)
         self.beta = beta
 
-    def iterate(self):
-        super().iterate()
+    def update(self):
         # Rs*Rm+I = (2*Ps-I)*(2*Pm-I)+I = 4*Ps*Pm - 2*Ps - 2*Pm + 2*I
         model_fc = self.fourier_space_constraint(self._real_model)
         self._real_model[:] = (0.5*self.beta *
@@ -386,15 +403,11 @@ class RelaxedAveragedAlternatingReflectors(ConvexOptimizationAlgorithm):
 
 class HybridInputOutput(ConvexOptimizationAlgorithm):
     """Hybrid input output (HIO) algorithm"""
-    def __init__(self, beta, support=None, intensities=None,
-                 amplitudes=None, mask=None, real_model=None,
-                 fourier_model=None, link=None):
-        super().__init__(support, intensities, amplitudes, mask,
-                         real_model, fourier_model, link)
+    def __init__(self, beta, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.beta = beta
 
-    def iterate(self):
-        super().iterate()
+    def update(self):
         model_fc = self.fourier_space_constraint(self._real_model)
         self._real_model[:] = (self._support*model_fc +
                                (1-self._support)*(self._real_model -
@@ -403,11 +416,8 @@ class HybridInputOutput(ConvexOptimizationAlgorithm):
 
 class DifferenceMap(ConvexOptimizationAlgorithm):
     """Difference map algorithm"""
-    def __init__(self, beta, gamma_s=None, gamma_m=None,
-                 support=None, intensities=None, amplitudes=None, mask=None,
-                 real_model=None, fourier_model=None, link=None):
-        super().__init__(support, intensities, amplitudes, mask,
-                         real_model, fourier_model, link)
+    def __init__(self, beta, gamma_s=None, gamma_m=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.beta = beta
         sigma = 0.1
         if gamma_s is None:
@@ -423,8 +433,7 @@ class DifferenceMap(ConvexOptimizationAlgorithm):
         else:
             self.gamma_m = gamma_m
 
-    def iterate(self):
-        super().iterate()
+    def update(self):
         model_fc = self.fourier_space_constraint(self._real_model)
         model_rc = self.real_space_constraint(self._real_model)
 
@@ -436,24 +445,12 @@ class DifferenceMap(ConvexOptimizationAlgorithm):
 
 
 def reality_constraint(algorithm):
-    """Update an algorithm (class) to add a reality constraint"""
-    def iterate(self):
-        algorithm.iterate(self)
-        self._real_model[:] = numpy.real(self._real_model)
-    new_class = type("Real"+algorithm.__name__, (algorithm, ),
-                     {"iterate": iterate})
-    return new_class
+    algorithm._real_model[...] = numpy.real(algorithm._real_model)
 
 
 def positivity_constraint(algorithm):
-    """Update an algorithm (class) to add a positivity constraint"""
-    def iterate(self):
-        algorithm.iterate(self)
-        real_part = numpy.real(self._real_model)
-        real_part[real_part < 0.] = 0.
-    new_class = type("Pos"+algorithm.__name__, (algorithm, ),
-                     {"iterate": iterate})
-    return new_class
+    real_part = numpy.real(algorithm._real_model)
+    real_part[real_part < 0.] = 0
 
 
 class CombineReconstructions:
