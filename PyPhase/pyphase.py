@@ -4,7 +4,9 @@ from __future__ import annotations
 import collections
 import enum
 import typing
+import numpy.typing as npt
 from collections.abc import Iterable
+import abc
 
 
 try:
@@ -53,7 +55,7 @@ def cpu_on() -> bool:
     return backend == Backend.CPU
 
 
-def cpu_array(array):
+def cpu_array(array: npt.ArrayLike) -> npt.ArrayLike:
     """Convert an array to standard numpy, regardless of start type"""
     if cupy and isinstance(array, cupy.ndarray):
         return array.get()
@@ -94,12 +96,16 @@ class ChangingVariable:
         return value
 
 
-class ConvexOptimizationAlgorithm:
+class ConvexOptimizationAlgorithm(abc.ABC):
     """Base class for all convex optimization algorithms"""
-    def __init__(self, support=None, intensities=None,
-                 amplitudes=None, mask=None,
-                 real_model=None, fourier_model=None,
-                 constraints=None, link: ConvexOptimizationAlgorithm=None,
+    def __init__(self, support: npt.ArrayLike=None,
+                 intensities: npt.ArrayLike=None,
+                 amplitudes: npt.ArrayLike=None,
+                 mask: npt.ArrayLike=None,
+                 real_model: npt.ArrayLike=None,
+                 fourier_model: npt.ArrayLike=None,
+                 constraints: Iterable[function]=None,
+                 link: ConvexOptimizationAlgorithm=None,
                  copy: ConvexOptimizationAlgorithm=None):
 
         self._real_model = None
@@ -161,6 +167,8 @@ class ConvexOptimizationAlgorithm:
         self.constraints = alg.constraints
 
     def copy(self, alg: ConvexOptimizationAlgorithm) -> None:
+        """Copy all variables from another algorithm to this one.
+        No linking is done here."""
         self._support = alg._support.copy()
         self._amplitudes = alg._amplitudes.copy()
         self._mask = alg._mask.copy()
@@ -189,11 +197,11 @@ class ConvexOptimizationAlgorithm:
         self._iteration[0] = iteration
 
     @property
-    def real_model(self):
+    def real_model(self) -> npt.ArrayLike:
         return fft.ifftshift(self._real_model)
 
     @real_model.setter
-    def real_model(self, real_model):
+    def real_model(self, real_model: npt.ArrayLike) -> None:
         if (
                 self._real_model is not None and
                 self._real_model.shape == real_model.shape
@@ -202,31 +210,31 @@ class ConvexOptimizationAlgorithm:
         else:
             self._real_model = complex_type(fft.fftshift(real_model))
 
-    def link_model(self, alg: ConvexOptimizationAlgorithm):
-        """make the real_model ahared between two algorithms"""
+    def link_model(self, alg: ConvexOptimizationAlgorithm) -> None:
+        """Make the real_model shared between two algorithms"""
         self._real_model = alg._real_model
 
     @property
-    def support(self):
+    def support(self) -> npt.ArrayLike:
         return fft.ifftshift(self._support)
 
     @support.setter
-    def support(self, support) -> None:
+    def support(self, support: npt.ArrayLike) -> None:
         if self._support is not None and self._support.shape == support.shape:
             self._support[...] = real_type(fft.fftshift(support))
         else:
             self._support = real_type(fft.fftshift(support))
 
     def link_support(self, alg: ConvexOptimizationAlgorithm) -> None:
-        """make the support ahared between two algorithms"""
+        """Make the support shared between two algorithms"""
         self._support = alg._support
 
     @property
-    def fourier_model(self):
+    def fourier_model(self) -> npt.ArrayLike:
         return fft.ifftshift(fft.fftn(self._real_model))
 
     @fourier_model.setter
-    def fourier_model(self, fourier_model):
+    def fourier_model(self, fourier_model: npt.ArrayLike):
         if (
                 self._real_model is not None and
                 self._real_model.shape == fourier_model.shape
@@ -236,7 +244,7 @@ class ConvexOptimizationAlgorithm:
             self._real_model = fft.ifftn(fft.fftshift(fourier_model))
 
     @property
-    def fourier_model_projected(self):
+    def fourier_model_projected(self) -> npt.ArrayLike:
         fourier_model = fft.fftn(self._real_model)
         phases = numpy.angle(fourier_model)
         projected = (self._amplitudes*numpy.exp(1.j*phases)
@@ -246,26 +254,27 @@ class ConvexOptimizationAlgorithm:
     #                      (1-self._mask)*fft.fftn(self._real_model))
 
     @property
-    def real_model_before_projection(self):
+    def real_model_before_projection(self) -> npt.ArrayLike:
         projected = self.fourier_model_projected()
         return fft.fftshift(fft.ifftn(projected))
         # return fft.fftshift(fft.ifftn(numpy.exp(1.j*phases)*self._amplitudes+
         #                               (1-self._mask)*fourier_model))
 
     @property
-    def amplitudes(self):
+    def amplitudes(self) -> npt.ArrayLike:
         return fft.ifftshift(self._amplitudes)
 
     @property
-    def mask(self):
+    def mask(self) -> npt.ArrayLike:
         return fft.ifftshift(self._mask)
 
     def set_random_phases(self) -> None:
+        """Initialize the model with random phases in Foruier space"""
         shape = self.amplitudes.shape
         phases = 2 * numpy.pi * numpy.random.random(shape)
-        self.fourier_model[...] = self.amplitudes * numpy.exp(1.j * phases)
+        self.fourier_model = self.amplitudes * numpy.exp(1.j * phases)
 
-    def fourier_space_constraint(self, data):
+    def fourier_space_constraint(self, data: npt.ArrayLike) -> npt.ArrayLike:
         """Apply the Fourier-space constraint to a real-space model"""
         data_ft = fft.fftn(data)
         phases = numpy.angle(data_ft)
@@ -275,7 +284,7 @@ class ConvexOptimizationAlgorithm:
                            + (1-self._mask)*data_ft)
         return result
 
-    def real_space_constraint(self, data):
+    def real_space_constraint(self, data: npt.ArrayLike) -> npt.ArrayLike:
         """Apply the real-space constraint to a real-space model"""
         return data*self._support
 
@@ -297,17 +306,18 @@ class ConvexOptimizationAlgorithm:
         return float(real_error)
 
     @property
-    def real_model_projected(self):
+    def real_model_projected(self) -> npt.ArrayLike:
         return fft.ifftshift(self._real_model*self._support)
 
     def iterate(self, niterations: int=1) -> None:
-        """Progress the algorithm one iteration. Call this function!"""
+        """Progress the algorithm a number of iterations. Call this function!"""
         for _ in range(niterations):
             self._iteration[0] += 1
             self.update()
             for constraint in self.constraints:
                 constraint(self)
 
+    @abc.abstractmethod
     def update(self) -> None:
         """Update the iterate. Should be overloaded in subclasses. Will be
         called by iterate() so don't call it yourself.
@@ -318,22 +328,22 @@ class ConvexOptimizationAlgorithm:
 
 class ErrorReduction(ConvexOptimizationAlgorithm):
     """Basic error-reduction algorithm. Used mainly for refinement"""
-    def update(self):
+    def update(self) -> None:
         model_fc = self.fourier_space_constraint(self._real_model)
         self._real_model[:] = self._support*model_fc
 
 
 class RelaxedAveragedAlternatingReflectors(ConvexOptimizationAlgorithm):
     """Relaxed averaged alternating projetors (RAAR) algorithm"""
-    def __init__(self, beta, *args, **kwargs):
+    def __init__(self, beta: float, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.beta = beta
 
-    def update(self):
+    def update(self) -> None:
         # Rs*Rm+I = (2*Ps-I)*(2*Pm-I)+I = 4*Ps*Pm - 2*Ps - 2*Pm + 2*I
         model_fc = self.fourier_space_constraint(self._real_model)
         self._real_model[:] = (0.5*self.beta
-                               * (2.*self._real_modeln
+                               * (2.*self._real_model
                                   - 2.*model_fc
                                   - 2.*self._real_model*self._support
                                   + 4.*model_fc*self._support)
@@ -355,7 +365,8 @@ class HybridInputOutput(ConvexOptimizationAlgorithm):
 
 class DifferenceMap(ConvexOptimizationAlgorithm):
     """Difference map algorithm"""
-    def __init__(self, beta: float, gamma_s=None, gamma_m=None, *args, **kwargs):
+    def __init__(self, beta: float, gamma_s: float=None, gamma_m: float=None,
+                 *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.beta = beta
         sigma = 0.1
@@ -383,7 +394,7 @@ class DifferenceMap(ConvexOptimizationAlgorithm):
                                             self.fourier_space_constraint(fs)))
 
 
-class ModifyAlgorithm:
+class ModifyAlgorithm(abc.ABC):
     """Abstract class for algorithms that work on phasing algorithms"""
     def __init__(self):
         pass
@@ -394,21 +405,29 @@ class ModifyAlgorithm:
             # will capture the overwritten function itself
             def variable(iteration, v=variable):
                 return v
-            # variable = lambda iteration, v=variable: v
         self.__dict__[name] = variable
 
-    def modify(self, algorithm: ConvexOptimizationAlgorithm) -> None:
-        self.update_variables(algorithm.iteration)
+    @abc.abstractmethod
+    def update(self, algorithm: ConvexOptimizationAlgorithm) -> None:
+        pass
+
+
+class NoModification(ModifyAlgorithm):
+    """Modification that doesn't do anything"""
+    def update(self, algorithm: ConvexOptimizationAlgorithm) -> None:
+        pass
 
 
 class ThresholdSupport(ModifyAlgorithm):
     """Update the support by thresholding a blurred version of real-space"""
-    def __init__(self, threshold: float, blur: float):
+    def __init__(self,
+                 threshold: typing.Union[float, ChangingVariable],
+                 blur: typing.Union[float, ChangingVariable]):
         super().__init__()
         self.add_variable(threshold, "threshold")
         self.add_variable(blur, "blur")
 
-    def update_support(self, algorithm: ConvexOptimizationAlgorithm) -> None:
+    def update(self, algorithm: ConvexOptimizationAlgorithm) -> None:
         """Apply the support update rule for the real space in algorithm"""
         iteration = algorithm.iteration
         blurred_model = ndimage.gaussian_filter(abs(algorithm.real_model),
@@ -419,12 +438,14 @@ class ThresholdSupport(ModifyAlgorithm):
 
 class AreaSupport(ModifyAlgorithm):
     """Update the support to the densest part of real-space after blurring"""
-    def __init__(self, area: float, blur: float):
+    def __init__(self,
+                 area: typing.Union[float, ChangingVariable],
+                 blur: typing.Union[float, ChangingVariable]):
         super().__init__()
         self.add_variable(area, "threshold")
         self.add_variable(blur, "blur")
 
-    def update_support(self, algorithm: ConvexOptimizationAlgorithm) -> None:
+    def update(self, algorithm: ConvexOptimizationAlgorithm) -> None:
         """Apply the support update rule for the real space in algorithm"""
         iteration = algorithm.iteration
         blurred_model = ndimage.gaussian_filter(abs(algorithm.real_model),
@@ -455,7 +476,7 @@ class CenterSupport(ModifyAlgorithm):
         pos = numpy.unravel_index(conv.argmax(), conv.shape)
         return pos
 
-    def update_support(self, algorithm: ConvexOptimizationAlgorithm) -> None:
+    def update(self, algorithm: ConvexOptimizationAlgorithm) -> None:
         """Apply the support update rule for the real space in algorithm"""
         pos = self._find_center(algorithm.support)
         if backend == Backend.CUPY:
@@ -467,37 +488,45 @@ class CenterSupport(ModifyAlgorithm):
 
 
 def reality_constraint(algorithm: ConvexOptimizationAlgorithm) -> None:
+    """Enforce reality constraint onto the real_model in the algorithm.
+    In other words, set the imaginary part to zero."""
     algorithm._real_model[...] = numpy.real(algorithm._real_model)
 
 
 def positivity_constraint(algorithm: ConvexOptimizationAlgorithm) -> None:
+    """Enforce positivity constraint onto the real_model in the algorithm.
+    In other words, set any negative part of the real part to zero."""
     real_part = numpy.real(algorithm._real_model)
     real_part[real_part < 0.] = 0
 
 def refine_and_update_support(phasing_alg: ConvexOptimizationAlgorithm,
                               support_alg: typing.Union[ModifyAlgorithm,
                               collections.abc.Iterable[ModifyAlgorithm]],
-                              nrefine_iterations: int=5):
+                              nrefine_iterations: int=5) -> None:
+    """Run a small number of error reduction iterations followed by a
+    support update"""
     if isinstance(support_alg, ModifyAlgorithm):
         support_alg = [support_alg]
     refine_alg = ErrorReduction(copy=phasing_alg)
     refine_alg.iterate(nrefine_iterations)
     for this_support_alg in support_alg:
-        this_support_alg.update_support(refine_alg)
+        this_support_alg.update(refine_alg)
     phasing_alg.support = refine_alg.support
 
 
 class CombineReconstructions:
-    """Combine independent reconstructions to calculate average and PRTF"""
-    def __init__(self, reference):
+    """Combine independent reconstructions to calculate average and
+    PRTF. The reference should typically be one of the
+    reconstructions (in real space)"""
+    def __init__(self, reference: npt.ArrayLike):
         self.reference = complex_type(reference)
         self.fourier_reference = fft.fftn(fft.fftshift(self.reference))
         self.image_sum = numpy.zeros_like(self.reference)
         self.phase_sum = numpy.zeros_like(self.reference)
         self.counter = 0
 
-    def add_image(self, image):
-        """Add one reconstruction"""
+    def add_image(self, image: npt.ArrayLike) -> None:
+        """Add one reconstruction. This should be a real-space image."""
         image = complex_type(image)
         fourier_image = fft.fftn(fft.fftshift(image))
         conv_1 = fft.ifftn(numpy.conj(fourier_image)*self.fourier_reference)
@@ -520,14 +549,14 @@ class CombineReconstructions:
         self.image_sum += translated_image / numpy.exp(1.j*average_phase)
         self.counter += 1
 
-    def average_image(self):
+    def average_image(self) -> npt.ArrayLike:
         """Retrieve the average of the previously added reconstructions"""
         if self.counter <= 0:
             raise ValueError("Trying to retrieve average image without "
                              "adding images first.")
         return self.image_sum / self.counter
 
-    def prtf(self):
+    def prtf(self) -> npt.ArrayLike:
         """Retrieve the PRTF of the previously added reconstructions"""
         if self.counter <= 0:
             raise ValueError("Trying to retrieve PRTF without adding "
