@@ -438,23 +438,21 @@ class ThresholdSupport(ModifyAlgorithm):
 
 class AreaSupport(ModifyAlgorithm):
     """Update the support to the densest part of real-space after blurring"""
-    def __init__(self, autocorrelation, area, blur):
+    def __init__(self,
+                 area: typing.Union[float, ChangingVariable],
+                 blur: typing.Union[float, ChangingVariable]):
         super().__init__()
-        self.add_variable(autocorrelation, "autocorrelation")
-        self.add_variable(area, "area")
+        self.add_variable(area, "threshold")
         self.add_variable(blur, "blur")
-        
-    def update_support(self, algorithm):
+
+    def update(self, algorithm: ConvexOptimizationAlgorithm) -> None:
         """Apply the support update rule for the real space in algorithm"""
         iteration = algorithm.iteration
         blurred_model = ndimage.gaussian_filter(abs(algorithm.real_model),
-                                                self.blur(iteration))  
-        autocorrelation_percent = self.autocorrelation(iteration)/numpy.product(blurred_model.shape)
+                                                self.blur(iteration))
         area_percent = self.area(iteration)/numpy.product(blurred_model.shape)
-        
-        percent = (numpy.max((autocorrelation_percent*numpy.exp(-.1*iteration),area_percent)))*100
-        threshold = numpy.percentile(blurred_model.flat, 100 - percent)
-        algorithm.support = blurred_model > threshold
+        threshold = numpy.percentile(blurred_model.flat, area_percent)
+        algorithm.support = blurred_model > blurred_model.max() * threshold
 
 
 class CenterSupport(ModifyAlgorithm):
