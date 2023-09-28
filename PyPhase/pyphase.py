@@ -442,7 +442,7 @@ class AreaSupport(ModifyAlgorithm):
                  area: typing.Union[float, ChangingVariable],
                  blur: typing.Union[float, ChangingVariable]):
         super().__init__()
-        self.add_variable(area, "threshold")
+        self.add_variable(area, "area")
         self.add_variable(blur, "blur")
 
     def update(self, algorithm: ConvexOptimizationAlgorithm) -> None:
@@ -450,9 +450,9 @@ class AreaSupport(ModifyAlgorithm):
         iteration = algorithm.iteration
         blurred_model = ndimage.gaussian_filter(abs(algorithm.real_model),
                                                 self.blur(iteration))
-        area_percent = self.area(iteration)/numpy.product(blurred_model.shape)
-        threshold = numpy.percentile(blurred_model.flat, area_percent)
-        algorithm.support = blurred_model > blurred_model.max() * threshold
+        area_percent = 100*self.area(iteration)/numpy.product(blurred_model.shape)
+        threshold = numpy.percentile(blurred_model.flat, 100-area_percent)
+        algorithm.support = blurred_model > threshold
 
 
 class CenterSupport(ModifyAlgorithm):
