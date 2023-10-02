@@ -454,7 +454,11 @@ def positivity_constraint(algorithm):
 
 
 class CombineReconstructions:
-    """Combine independent reconstructions to calculate average and PRTF"""
+    """Combine independent reconstructions to calculate average and
+    PRTF. Provide a reference image that will be used as a template
+    when centering the other reconstructions.
+
+    """
     def __init__(self, reference):
         self.reference = complex_type(reference)
         self.fourier_reference = fft.fftn(fft.fftshift(self.reference))
@@ -463,7 +467,7 @@ class CombineReconstructions:
         self.counter = 0
 
     def add_image(self, image):
-        """Add one reconstruction"""
+        """Add one (real-space) reconstruction """
         image = complex_type(image)
         fourier_image = fft.fftn(fft.fftshift(image))
         conv_1 = fft.ifftn(numpy.conj(fourier_image)*self.fourier_reference)
