@@ -551,6 +551,12 @@ class CombineReconstructions:
         self.image_sum += translated_image / numpy.exp(1.j*average_phase)
         self.counter += 1
 
+    def add_images(self, images: Iterable[npt.ArrayLike]) -> None:
+        """Add a number of reconstructions. This should be real-space
+        images."""
+        for image in images:
+            self.add_image(image)
+
     def average_image(self) -> npt.ArrayLike:
         """Retrieve the average of the previously added reconstructions"""
         if self.counter <= 0:
